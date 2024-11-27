@@ -155,6 +155,9 @@ int main(int argc, char **argv)
   
   // "n" is the previously declared node handle.
   ros::NodeHandle n;
+
+  // Instantiate a listener that listens to the tf and tf_static topics and to update the buffer.
+  tf2_ros::TransformListener tfListener(tfBuffer);
   
   // clear the order vector
   order_vector.clear();
@@ -185,9 +188,6 @@ int main(int argc, char **argv)
   ros::Subscriber logical_camera_subscriber_bin6 = n.subscribe("/ariac/logical_camera_bin6", 10, logicbin6CameraCallback);
   ros::Subscriber logical_camera_subscriber_quality_control_sensor1 = n.subscribe("/ariac/quality_control_sensor_1", 10, logicQuality1CameraCallback);
   ros::Subscriber logical_camera_subscriber_quality_control_sensor2 = n.subscribe("/ariac/quality_control_sensor_2", 10, logicQuality2CameraCallback);
-  
-  // Instantiate a listener that listens to the tf and tf_static topics and to update the buffer.
-  tf2_ros::TransformListener tfListener(tfBuffer);
 
 
   // Create the service client.
@@ -205,17 +205,31 @@ int main(int argc, char **argv)
   // Call the Service
   service_call_succeeded = begin_client.call(begin_comp);
 
+  int max_retry_count = 125;
+  int retry_count = 0;
   // Call the Trigger service
-  if (service_call_succeeded == 0){
-	  ROS_ERROR("Competition service call failed! Goodnes Gracious!!");
-  }else{
-	  if(begin_comp.response.success){
-          ROS_INFO("Competition service called successfully: %s", begin_comp.response.message.c_str());
-          }
+  while((retry_count < max_retry_count) && (service_call_succeeded == 0)){
+    // Call the Service
+    service_call_succeeded = begin_client.call(begin_comp);
+    if (service_call_succeeded == 0){
+	    ROS_ERROR("Competition service call failed! Goodnes Gracious!!");
+      ROS_ERROR("Retrying the call again!");
+      retry_count= retry_count +1;
+      ros::Duration(4.0).sleep();
+    }
     else{
-	  ROS_WARN("Competition service returned failure: %s", begin_comp.response.message.c_str());
+	  if(begin_comp.response.success)
+    {
+      ROS_INFO("Competition service called successfully: %s", begin_comp.response.message.c_str());
+      break;
+    }
+    else{
+	      ROS_WARN("Competition service returned failure: %s", begin_comp.response.message.c_str());
+        break;
       }
+    }
   }
+
 
   // Let ROS handle incoming messages 
   ros::spinOnce();
@@ -276,7 +290,7 @@ int main(int argc, char **argv)
 						  const osrf_gear::LogicalCameraImage* camera_data = getCameraData(storage_unit.unit_id, logical_cameras_bin, logical_cameras_agv, logical_cameras_quality);
 					 	  bool found_product = false;
 						  for (const auto& model : camera_data->models) {
-							  // Check if the model type matches the product type we're looking for
+							  // Check if the model type matprint the pose of this tooches the product type we're looking for
 							  ROS_INFO("Search through the logical_camera data for the bin specified by the material_location service");
 							  if (model.type == product.type) {
 							    // Log the product type, bin, and pose information
@@ -315,13 +329,23 @@ int main(int argc, char **argv)
                   geometry_msgs::PoseStamped part_pose, goal_pose;
                   part_pose.pose = found_product_pose.back();
 
+                  
+                  ROS_INFO("Part Pose in Camera Frame: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
+                          part_pose.pose.position.x, part_pose.pose.position.y, part_pose.pose.position.z,
+                          part_pose.pose.orientation.x, part_pose.pose.orientation.y,
+                          part_pose.pose.orientation.z, part_pose.pose.orientation.w);
+
                   // Retrieve the transformation
                   geometry_msgs::TransformStamped tfStamped;
                   try {
-                      tfStamped = tfBuffer.lookupTransform("arm1_base_link", camera_frame_name,
-                      ros::Time(0.0), ros::Duration(1.0));
-                      ROS_INFO("Transform to [%s] from [%s]", tfStamped.header.frame_id.c_str(),
-                      tfStamped.child_frame_id.c_str());
+                      tfStamped = tfBuffer.lookupTransform("arm1_base_link", camera_frame_name.c_str(),
+                      ros::Time(0.0), ros::Duration(10.0));
+                      ROS_INFO("Transform from [%s] to [%s]: Translation -> x=%.2f, y=%.2f, z=%.2f, Rotation -> x=%.2f, y=%.2f, z=%.2f, w=%.2f",
+                      tfStamped.header.frame_id.c_str(), tfStamped.child_frame_id.c_str(),
+                      tfStamped.transform.translation.x, tfStamped.transform.translation.y, tfStamped.transform.translation.z,
+                      tfStamped.transform.rotation.x, tfStamped.transform.rotation.y, tfStamped.transform.rotation.z, tfStamped.transform.rotation.w);
+
+
 
                       // do the transfromation so the pose of the part with respect to the robot is known
                       tf2::doTransform(part_pose, goal_pose, tfStamped);
@@ -329,11 +353,19 @@ int main(int argc, char **argv)
                       // Add height to the goal pose.
                       goal_pose.pose.position.z += 0.10; // 10 cm above the part
 
+                      // Print the transformed goal pose
+                      ROS_INFO("Transformed goal pose: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
+                              goal_pose.pose.position.x, goal_pose.pose.position.y, goal_pose.pose.position.z,
+                              goal_pose.pose.orientation.x, goal_pose.pose.orientation.y,
+                              goal_pose.pose.orientation.z, goal_pose.pose.orientation.w);
+
+
                       // Set the request field of the ik_service::PoseIK variable equal to the goal pose
                       ik_pose.request.part_pose = goal_pose.pose;
 
                       // Update the client.call() to use the ik_service::PoseIK variable.
-                      if (pose_ik_client.call(ik_pose))
+                      bool success = pose_ik_client.call(ik_pose);
+                      if (success)
                       {
                       // Finally, update the ROS_INFO() messages to indicate that the client.call() returned request.num_sols solutions
                         ROS_INFO("Call to ik_service returned [%i] solutions", ik_pose.response.num_sols);
@@ -354,10 +386,23 @@ int main(int argc, char **argv)
                       }
                       else
                       {
-                        //Remove the processed product from the queue when its is completd
-			                found_product_pose.pop_back();
-                      // Finally, update the ROS_INFO() messages to indicate that the client.call() failed
-                        ROS_ERROR("Failed to call service ik_service");
+                        if(!success){
+                          //Remove the processed product from the queue when its is completd
+                          found_product_pose.pop_back();
+                          // Finally, update the ROS_INFO() messages to indicate that the client.call() failed
+                            ROS_INFO("ik_service could not find a solution for this transformation: Transformed goal pose: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
+                              goal_pose.pose.position.x, goal_pose.pose.position.y, goal_pose.pose.position.z,
+                              goal_pose.pose.orientation.x, goal_pose.pose.orientation.y,
+                              goal_pose.pose.orientation.z, goal_pose.pose.orientation.w);
+                        }
+                        else{
+                          //Remove the processed product from the queue when its is completd
+                          found_product_pose.pop_back();
+                          // Finally, update the ROS_INFO() messages to indicate that the client.call() failed
+                            ROS_ERROR("Failed to call service ik_service");
+
+                        }
+                        
                         
                       }
 
