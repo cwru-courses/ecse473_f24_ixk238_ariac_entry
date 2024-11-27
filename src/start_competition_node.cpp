@@ -330,7 +330,7 @@ int main(int argc, char **argv)
                   part_pose.pose = found_product_pose.back();
 
                   
-                  ROS_INFO("Part Pose in Camera Frame: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
+                  ROS_INFO("Location of the part in refernce frame of the logical camera: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
                           part_pose.pose.position.x, part_pose.pose.position.y, part_pose.pose.position.z,
                           part_pose.pose.orientation.x, part_pose.pose.orientation.y,
                           part_pose.pose.orientation.z, part_pose.pose.orientation.w);
@@ -341,7 +341,7 @@ int main(int argc, char **argv)
                       tfStamped = tfBuffer.lookupTransform("arm1_base_link", camera_frame_name.c_str(),
                       ros::Time(0.0), ros::Duration(10.0));
                       ROS_INFO("Transform from [%s] to [%s]: Translation -> x=%.2f, y=%.2f, z=%.2f, Rotation -> x=%.2f, y=%.2f, z=%.2f, w=%.2f",
-                      tfStamped.header.frame_id.c_str(), tfStamped.child_frame_id.c_str(),
+                      camera_frame_name.c_str(), "arm1_base_link",
                       tfStamped.transform.translation.x, tfStamped.transform.translation.y, tfStamped.transform.translation.z,
                       tfStamped.transform.rotation.x, tfStamped.transform.rotation.y, tfStamped.transform.rotation.z, tfStamped.transform.rotation.w);
 
@@ -354,7 +354,7 @@ int main(int argc, char **argv)
                       goal_pose.pose.position.z += 0.10; // 10 cm above the part
 
                       // Print the transformed goal pose
-                      ROS_INFO("Transformed goal pose: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
+                      ROS_INFO("Location of the part in the reference frame of the robot arm1_base_link: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
                               goal_pose.pose.position.x, goal_pose.pose.position.y, goal_pose.pose.position.z,
                               goal_pose.pose.orientation.x, goal_pose.pose.orientation.y,
                               goal_pose.pose.orientation.z, goal_pose.pose.orientation.w);
