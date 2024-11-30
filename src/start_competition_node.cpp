@@ -10,6 +10,9 @@
 #include "tf2_geometry_msgs/tf2_geometry_msgs.h"
 #include "geometry_msgs/TransformStamped.h"
 #include "ik_service/PoseIK.h"
+#include "sensor_msgs/JointState.h"
+#include "trajectory_msgs/JointTrajectory.h" // L6
+#include "trajectory_msgs/JointTrajectoryPoint.h" // L6
 
 // Declare the variable in this way where necessary in the code.
 std_srvs::Trigger begin_comp;
@@ -28,6 +31,20 @@ std::vector<geometry_msgs::Pose> found_product_pose;
 
 //Declare an ik_service::PoseIK variable
 ik_service::PoseIK ik_pose;
+
+// L6- Declare a variable for storing the joint names of the robot.
+std::vector<std::string> joint_names;
+
+//L6-  Declare a variable for storing the current state of the joints of the robot.
+sensor_msgs::JointState joint_states;
+
+// L6- Publisher for joint trajectory
+ros::Publisher joint_trajectory_publisher;
+
+// L6- Joint trajectory header count
+int joint_trajectory_header_count = 0;
+
+
 
 // This function is written to get the appropriate camera data according to given storage unit id
 const osrf_gear::LogicalCameraImage* getCameraData(
@@ -91,6 +108,11 @@ void printlogicalCameraCallback(const osrf_gear::LogicalCameraImage::ConstPtr& m
     }
 }
 
+// L6- Callback to receive the state of the joints of the robot
+void jointStatesCallback(const sensor_msgs::JointState::ConstPtr& msg){
+  joint_states = *msg;
+}
+
 
 // Callback function to subscribe to logical cameras
 // agv Cameras
@@ -142,9 +164,88 @@ void logicQuality2CameraCallback(const osrf_gear::LogicalCameraImage::ConstPtr& 
 void orderCallback(const osrf_gear::Order::ConstPtr& orders){
  // Add order to the end of the vector
   order_vector.push_back(*orders);
-  // Print order id
-  //ROS_INFO("Order ID: [%s]", orders->order_id.c_str());
 }
+
+void logJointAngles(const auto& ik_pose) {
+  for(int i = 0; i < ik_pose.num_sols; i++) {
+    ROS_INFO("Solution Num: %d", i + 1);
+    for(int j = 0; j < 6; j++) {
+      ROS_INFO("Joint angle [%d]: %.4f ", j + 1, ik_pose.joint_solutions[i].joint_angles[j]);
+    }
+  }
+}
+
+int chooseSolution(const auto& ik_pose) {
+  for(int i = 0; i < ik_pose.num_sols; i++) {
+    // Restrict the solution for shoulder_lift_joint to a region of 90 degrees to reduce solutions
+    double shoulder_lift_angle = ik_pose.joint_solutions[i].joint_angles[1];
+    if (shoulder_lift_angle >= 0 && shoulder_lift_angle <= 1.5708) {
+      // Further restrict based on wrist_2_joint angle to pick only one solution
+      double wrist_2_angle = ik_pose.joint_solutions[i].joint_angles[4];
+      if (wrist_2_angle >= 1.5708 || wrist_2_angle <= 3 * 1.5708) {
+        return i; // Return the index of the chosen solution
+      }
+    }
+  }
+  return -1;
+}
+
+// L6- 
+void setAndPublishJointTrajectory() {
+  // Set a waypoint.
+  // Declare a joint trajectory message variable
+  trajectory_msgs::JointTrajectory joint_trajectory;
+  joint_trajectory.joint_names = {
+    "linear_arm_actuator_joint",
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint"
+  };
+  // Fill out the joint trajectory header.
+  // Each joint trajectory should have a non-monotonically increasing sequence number.
+  joint_trajectory.header.seq = joint_trajectory_header_count++; // Keep a variable to increment the count.
+  joint_trajectory.header.stamp = ros::Time::now(); // When was this message created.
+  joint_trajectory.header.frame_id = "arm1_base_link"; // Frame in which this is specified.
+
+  // Prepare the trajectory to take one entry.
+  joint_trajectory.points.resize(1);
+
+  // Create a variable to hold a single point.
+  trajectory_msgs::JointTrajectoryPoint point;
+
+  // Set the start point to the current position of the joints from joint_states.
+  point.positions.resize(joint_trajectory.joint_names.size());
+  for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
+    for (int s_joint = 0; s_joint < joint_states.name.size(); s_joint++) {
+      if (joint_trajectory.joint_names[t_joint] == joint_states.name[s_joint]) {
+        point.positions[t_joint] = joint_states.position[s_joint];
+        break;
+      }
+    }
+  }
+
+  // The index for the elbow joint is 3 (assuming standard UR10 naming conventions).
+  point.positions[3] += 0.1;
+
+  // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
+  point.positions[0] = joint_states.position[1];
+
+  // The duration of the movement.
+  point.time_from_start = ros::Duration(0.25);
+
+  // When to start (shortly after receipt).
+  point.time_from_start = ros::Duration(0.25);
+
+  // Add the point to the joint trajectory
+  joint_trajectory.points.push_back(point);
+
+  // Publish the desired single waypoint.
+  joint_trajectory_publisher.publish(joint_trajectory);
+}
+
 
 int main(int argc, char **argv)
 {
@@ -166,6 +267,10 @@ int main(int argc, char **argv)
   logical_cameras_bin.clear();
   logical_cameras_agv.clear();
   logical_cameras_quality.clear();
+
+  //L6- Get the names of the joints being used.
+  joint_names.clear();
+  
 
   // clear the found product pose 
   found_product_pose.clear();
@@ -190,14 +295,35 @@ int main(int argc, char **argv)
   ros::Subscriber logical_camera_subscriber_quality_control_sensor2 = n.subscribe("/ariac/quality_control_sensor_2", 10, logicQuality2CameraCallback);
 
 
+  // L6- Wait to make sure the service is available.
+  while(!ros::service::waitForService("/ariac/start_competition", 3000)){
+    ROS_WARN("/ariac/start_competition service is not available");
+  }
+  ROS_WARN("/ariac/start_competitionservice is available now.");
+
   // Create the service client.
   ros::ServiceClient begin_client = n.serviceClient<std_srvs::Trigger>("/ariac/start_competition");
 
+
+  // L6-Wait to make sure the service is available.
+  if(!ros::service::waitForService("pose_ik", 3000)){
+    ROS_WARN("pose_ik service is not available");
+  }
+  ROS_WARN("pose_ik service is available now.");
   // Create client for pose_ik service
   ros::ServiceClient pose_ik_client = n.serviceClient<ik_service::PoseIK>("pose_ik");
   
   // Create service client in order to request the bin location of a specific material type 
   ros::ServiceClient request_bin_location = n.serviceClient<osrf_gear::GetMaterialLocations>("/ariac/material_locations");
+
+  // L6- Get the arm joint names
+  ros::param::get("/ariac/arm1/arm/joints", joint_names);
+
+  //L6- Create a subscriber to receive the state of the joints of the robot.
+  ros::Subscriber joint_states_h = n.subscribe("ariac/arm1/joint_states", 10, jointStatesCallback);
+
+  //L6- Create a publisher for the joint trajectory command topic
+  joint_trajectory_publisher = n.advertise<trajectory_msgs::JointTrajectory>("/ariac/arm1/arm/command", 10);
 
   // Variable to capture service call success.
   int service_call_succeeded;
@@ -205,39 +331,33 @@ int main(int argc, char **argv)
   // Call the Service
   service_call_succeeded = begin_client.call(begin_comp);
 
-  int max_retry_count = 125;
-  int retry_count = 0;
-  // Call the Trigger service
-  while((retry_count < max_retry_count) && (service_call_succeeded == 0)){
-    // Call the Service
-    service_call_succeeded = begin_client.call(begin_comp);
+  
     if (service_call_succeeded == 0){
 	    ROS_ERROR("Competition service call failed! Goodnes Gracious!!");
-      ROS_ERROR("Retrying the call again!");
-      retry_count= retry_count +1;
-      ros::Duration(4.0).sleep();
     }
     else{
 	  if(begin_comp.response.success)
     {
       ROS_INFO("Competition service called successfully: %s", begin_comp.response.message.c_str());
-      break;
     }
     else{
 	      ROS_WARN("Competition service returned failure: %s", begin_comp.response.message.c_str());
-        break;
       }
     }
-  }
-
 
   // Let ROS handle incoming messages 
-  ros::spinOnce();
+  // ROS spin is removed in Lab6
+  // ros::spinOnce();
   ros::Duration(1.0).sleep(); // Allow some time for orders to be received
+
+  // Lab 6- Asynchronous spinner is added 
+  ros::AsyncSpinner spinner(1); // Use 1 thread
+  spinner.start(); // A spinner makes calling ros::spin() unnecessary
 
   // In order to iterate over the orders 
   while (ros::ok()) {
-    ros::spinOnce(); // spinOnce for the callbacks
+    // ROS spin is removedd in Lab6
+    //ros::spinOnce(); // spinOnce for the callbacks
 
     // If the order_vector has a sıze greater than zero
     if (order_vector.size() > 0) {
@@ -370,16 +490,14 @@ int main(int argc, char **argv)
                       // Finally, update the ROS_INFO() messages to indicate that the client.call() returned request.num_sols solutions
                         ROS_INFO("Call to ik_service returned [%i] solutions", ik_pose.response.num_sols);
                         
-                        // Add to the ROS_INFO() to show those set of joint angles
-                        for(int i = 0 ; i < ik_pose.response.num_sols ; i++){
-                          ROS_INFO("Solution Num: %d", i+1);
-                          for(int j = 0 ; j < 6 ; j++){
-                          ROS_INFO("Joint angle [%d]: %.4f ", j+1, ik_pose.response.joint_solutions[i].joint_angles[j]);
-                          }
-                        
-                        
+                        int solutionNum = chooseSolution(ik_pose.response);
+                         // Set and publish the joint trajectory
+                         setAndPublishJointTrajectory();
+                        // print the chosen solution
+                        for(int j = 0 ; j < 6 ; j++){
+                          ROS_INFO("Joint angle [%d]: %.4f ", j+1, ik_pose.response.joint_solutions[solutionNum].joint_angles[j]);
+                        }
 
-                      }
                       //Remove the processed product from the queue when its is completd
 			                found_product_pose.pop_back();
                       
@@ -432,7 +550,7 @@ int main(int argc, char **argv)
           ros::Duration(1.0).sleep(); 
   } 
   }
-
-  ros::spin(); 
+  // ROS spin is removedd in Lab6
+  //ros::spin(); 
   return 0;
 }
