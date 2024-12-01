@@ -14,6 +14,9 @@
 #include "trajectory_msgs/JointTrajectory.h" // L6
 #include "trajectory_msgs/JointTrajectoryPoint.h" // L6
 
+#define GREEN_TEXT "\033[32m"
+#define RESET_TEXT "\033[0m"
+
 // Declare the variable in this way where necessary in the code.
 std_srvs::Trigger begin_comp;
 // Declare an order vector
@@ -44,7 +47,8 @@ ros::Publisher joint_trajectory_publisher;
 // L6- Joint trajectory header count
 int joint_trajectory_header_count = 0;
 
-
+//L6-
+std::vector<geometry_msgs::Pose> specific_poses;
 
 // This function is written to get the appropriate camera data according to given storage unit id
 const osrf_gear::LogicalCameraImage* getCameraData(
@@ -111,6 +115,16 @@ void printlogicalCameraCallback(const osrf_gear::LogicalCameraImage::ConstPtr& m
 // L6- Callback to receive the state of the joints of the robot
 void jointStatesCallback(const sensor_msgs::JointState::ConstPtr& msg){
   joint_states = *msg;
+  static bool was_moving = false;
+  bool is_moving = std::any_of(msg->velocity.begin(), msg->velocity.end(), [](double vel) { return fabs(vel) > 0.001; });
+
+  if (is_moving && !was_moving) {
+    ROS_INFO("%sThe arm is moving",GREEN_TEXT);
+  } else if (!is_moving && was_moving) {
+    ROS_INFO("%sThe arm is not in motion",GREEN_TEXT);
+  }
+
+  was_moving = is_moving;
 }
 
 
@@ -176,21 +190,210 @@ void logJointAngles(const auto& ik_pose) {
 }
 
 int chooseSolution(const auto& ik_pose) {
+  const double tolerance = 0.1; // Add a small tolerance to wrist_2_joint angle
+
   for(int i = 0; i < ik_pose.num_sols; i++) {
     // Restrict the solution for shoulder_lift_joint to a region of 90 degrees to reduce solutions
     double shoulder_lift_angle = ik_pose.joint_solutions[i].joint_angles[1];
     if (shoulder_lift_angle >= 0 && shoulder_lift_angle <= 1.5708) {
       // Further restrict based on wrist_2_joint angle to pick only one solution
       double wrist_2_angle = ik_pose.joint_solutions[i].joint_angles[4];
-      if (wrist_2_angle >= 1.5708 || wrist_2_angle <= 3 * 1.5708) {
+      if ((wrist_2_angle >= (1.5708 - tolerance) && wrist_2_angle <= (1.5708 + tolerance)) ||
+          (wrist_2_angle >= (3 * 1.5708 - tolerance) && wrist_2_angle <= (3 * 1.5708 + tolerance))) {
         return i; // Return the index of the chosen solution
       }
     }
   }
-  return -1;
+  return -1; // Return -1 if no valid solution is found
 }
 
-// L6- 
+
+bool armMoving(const sensor_msgs::JointState& joint_states) {
+    double velocity_threshold = 0.0001; 
+    for (const auto& velocity : joint_states.velocity) {
+        if (std::abs(velocity) > velocity_threshold) {
+            return true; 
+        }
+    }
+    return false; 
+}
+
+/** L6- moveToSpecıfıc Points Function
+ *  Moves the UR10 robot arm to a series of predefined poses using inverse kinematics (IK) solutions.
+ *
+ * This function generates a trajectory to move the robot arm through a sequence of specific positions 
+ * and orientations defined in Cartesian space. The function calculates joint configurations for each pose 
+ * using an inverse kinematics service, then publishes the resulting joint trajectories for execution.
+ *
+ * Key functionality:
+ * - Defines a series of Cartesian positions and orientations for the robot's end-effector.
+ * - Uses the `ik_service::PoseIK` service to calculate joint angle solutions for each pose.
+ * - Selects a specific IK solution (based on `solutionNum`) to generate a joint trajectory.
+ * - Publishes the trajectory to the robot for execution.
+ * - Transforms and logs the executed pose in the "world" frame for verification.
+ *
+ */
+void moveToSpecificPoints(ik_service::PoseIK& ik_pose, ros::ServiceClient& pose_ik_client, int solutionNum ) {
+  // Clear the vector
+  specific_poses.clear();
+
+  std::vector<std::vector<double>> joint_angle_trajectory;
+
+  // Define the positions and orientations for each pose
+  std::vector<std::vector<double>> positions = {
+      {0.75, 0.0, 0.95},
+      {0.0, 0.75, 0.95},
+      {0.25, 0.75, 0.95},
+      {0.75, 0.25, 0.95},
+      {0.75, 0.45, 0.75}
+  };
+
+  std::vector<std::vector<double>> orientations = {
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0}
+  };
+
+  // Iterate over each set of positions and orientations to create poses
+  for (size_t i = 0; i < positions.size(); ++i) {
+    geometry_msgs::Pose pose;
+
+    // Set position
+    pose.position.x = positions[i][0];
+    pose.position.y = positions[i][1];
+    pose.position.z = positions[i][2];
+
+    // Set orientation
+    pose.orientation.w = orientations[i][0];
+    pose.orientation.x = orientations[i][1];
+    pose.orientation.y = orientations[i][2];
+    pose.orientation.z = orientations[i][3];
+
+    // Set the request field of the ik_service::PoseIK variable equal to the goal pose
+    ik_pose.request.part_pose = pose;
+    // Update the client.call() to use the ik_service::PoseIK variable.
+    bool success = pose_ik_client.call(ik_pose);
+    if (success) {
+      ROS_INFO("%smtsp: Call to ik_service returned [%i] solutions",GREEN_TEXT, ik_pose.response.num_sols);
+      if (ik_pose.response.num_sols > 0) {
+        // Iterate over the solution and print the angles
+        ROS_INFO("%smtsp:Chosen solution: %d",GREEN_TEXT, solutionNum);
+        if (solutionNum >= 0 && solutionNum < ik_pose.response.num_sols) {
+          for (int j = 0; j < ik_pose.response.joint_solutions[solutionNum].joint_angles.size(); j++) {
+            ROS_INFO("%smtsp:Joint angle [%d]: %.4f",GREEN_TEXT, j + 1, ik_pose.response.joint_solutions[solutionNum].joint_angles[j]);
+          }
+          // create joint_angles variable from the response of the ik_pose response
+          std::vector<double> joint_angles(ik_pose.response.joint_solutions[solutionNum].joint_angles.begin(),
+                                           ik_pose.response.joint_solutions[solutionNum].joint_angles.end());
+          // give the names of the joint trajectory (according to the order mentioned in the lab)
+          trajectory_msgs::JointTrajectory joint_trajectory;
+          joint_trajectory.joint_names = {
+          "linear_arm_actuator_joint",
+          "shoulder_pan_joint",
+          "shoulder_lift_joint",
+          "elbow_joint",
+          "wrist_1_joint",
+          "wrist_2_joint",
+          "wrist_3_joint"
+        };
+        // create joint trajectory for the start points
+        trajectory_msgs::JointTrajectoryPoint start_point;
+        start_point.positions.resize(joint_trajectory.joint_names.size());
+        for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
+          for (int s_joint = 0; s_joint < joint_states.name.size(); s_joint++) {
+            if (joint_trajectory.joint_names[t_joint] == joint_states.name[s_joint]) {
+              start_point.positions[t_joint] = joint_states.position[s_joint];
+              break;
+            }
+          }
+        }
+
+        // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
+        start_point.positions[0] = joint_states.position[1];
+        start_point.time_from_start = ros::Duration(0.0);
+
+        // create joint trajectory for the goal points
+        trajectory_msgs::JointTrajectoryPoint goal_point;
+        goal_point.positions.resize(joint_trajectory.joint_names.size());
+        start_point.positions[0] = joint_states.position[1];
+        for(int j = 0; j < joint_angles.size(); j++){
+          goal_point.positions[j+1] = joint_angles[j];
+        }
+        goal_point.time_from_start = ros::Duration(3.0); 
+
+        joint_trajectory.points.push_back(start_point);
+        joint_trajectory.points.push_back(goal_point);
+
+        // Publish the desired trajectory
+        joint_trajectory_publisher.publish(joint_trajectory);
+         
+        }
+      }
+    } else {
+      ROS_WARN("mtsp: Failed to call ik_service!!");
+    }
+    // log the published trajectory pose
+    ROS_INFO("%sPublished trajectory to pose (%.2f, %.2f, %.2f)",GREEN_TEXT, pose.position.x, pose.position.y, pose.position.z);
+
+    ros::Rate rate(1);
+    while (ros::ok()) {
+      // if the arm is not moving anymore, that mean the robot reached the desired position
+      if (!armMoving(joint_states)) {
+        ROS_INFO("%sUR10 has reached pose (%.2f, %.2f, %.2f)", GREEN_TEXT,
+                         pose.position.x, pose.position.y, pose.position.z);
+        // Since it is not explicitly mentioned in the lab description, I assumed that the given poses are
+        // according to the arm1_base_link frame, not according to the world frame. THerefore,
+        // to check whether the end-effector is in the desired position ı transformed the wanted position
+        // to the world frame.
+        // print the transformed version of this to the workcell so you can check
+        geometry_msgs::TransformStamped tfStamped_specific;
+        tfStamped_specific = tfBuffer.lookupTransform("world", "arm1_base_link", ros::Time(0.0), ros::Duration(1.0));
+        // Create variables
+        geometry_msgs::PoseStamped robot_frame_pose, workcell_frame_pose;
+        robot_frame_pose.pose = pose;
+        tf2::doTransform(robot_frame_pose, workcell_frame_pose, tfStamped_specific);
+        // Log transformed pose in robot frame
+        ROS_INFO("%sRobot Frame Pose:\n"
+                 "  Position: (%.2f, %.2f, %.2f)\n"
+                 "  Orientation: (x: %.2f, y: %.2f, z: %.2f, w: %.2f)", GREEN_TEXT,
+                 robot_frame_pose.pose.position.x, robot_frame_pose.pose.position.y, robot_frame_pose.pose.position.z,
+                 robot_frame_pose.pose.orientation.x, robot_frame_pose.pose.orientation.y, 
+                 robot_frame_pose.pose.orientation.z, robot_frame_pose.pose.orientation.w);
+        tf2::Quaternion quat_workcell(workcell_frame_pose.pose.orientation.x,
+                                      workcell_frame_pose.pose.orientation.y,
+                                      workcell_frame_pose.pose.orientation.z,
+                                      workcell_frame_pose.pose.orientation.w);
+        double roll_workcell, pitch_workcell, yaw_workcell;
+        tf2::Matrix3x3(quat_workcell).getRPY(roll_workcell, pitch_workcell, yaw_workcell);
+        // Print position and orientation in world frame
+        ROS_INFO("%sWorld Frame Pose:\n"
+                 "  Position: (%.2f, %.2f, %.2f)\n"
+                 "  Orientation (RPY): Roll: %.2f, Pitch: %.2f, Yaw: %.2f", GREEN_TEXT,
+                 workcell_frame_pose.pose.position.x, workcell_frame_pose.pose.position.y, workcell_frame_pose.pose.position.z,
+                 roll_workcell, pitch_workcell, yaw_workcell);
+        // ask the user to hit enter to continue the execution
+         // Ask the user to press Enter to continue
+        ROS_INFO("Press Enter to move robot to next specified point...");
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+        break;
+      }
+      rate.sleep();
+    }
+  }
+}
+
+/** L6- setAndPublishJointTrajectory function
+ *  Sets and publishes a single waypoint for a joint trajectory.
+ *
+ * This function prepares and publishes a trajectory message for a robotic arm. 
+ * It defines a single waypoint in joint space based on the current joint states, 
+ * with a slight adjustment to the elbow joint (index 3) for demonstration purposes. 
+ * The waypoint is published as a `trajectory_msgs::JointTrajectory` message.
+ *
+ */
 void setAndPublishJointTrajectory() {
   // Set a waypoint.
   // Declare a joint trajectory message variable
@@ -204,14 +407,13 @@ void setAndPublishJointTrajectory() {
     "wrist_2_joint",
     "wrist_3_joint"
   };
+  joint_trajectory.points.clear();
   // Fill out the joint trajectory header.
   // Each joint trajectory should have a non-monotonically increasing sequence number.
   joint_trajectory.header.seq = joint_trajectory_header_count++; // Keep a variable to increment the count.
   joint_trajectory.header.stamp = ros::Time::now(); // When was this message created.
   joint_trajectory.header.frame_id = "arm1_base_link"; // Frame in which this is specified.
 
-  // Prepare the trajectory to take one entry.
-  joint_trajectory.points.resize(1);
 
   // Create a variable to hold a single point.
   trajectory_msgs::JointTrajectoryPoint point;
@@ -234,16 +436,19 @@ void setAndPublishJointTrajectory() {
   point.positions[0] = joint_states.position[1];
 
   // The duration of the movement.
-  point.time_from_start = ros::Duration(0.25);
+  point.time_from_start = ros::Duration(0);
 
   // When to start (shortly after receipt).
-  point.time_from_start = ros::Duration(0.25);
+  point.time_from_start = ros::Duration(1);
 
   // Add the point to the joint trajectory
   joint_trajectory.points.push_back(point);
-
+  ROS_INFO("Press Enter to move the elbow joint only...");
+  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
   // Publish the desired single waypoint.
   joint_trajectory_publisher.publish(joint_trajectory);
+  ROS_INFO("Press Enter to move robot to next specified point...");
+  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 }
 
 
@@ -358,7 +563,6 @@ int main(int argc, char **argv)
   while (ros::ok()) {
     // ROS spin is removedd in Lab6
     //ros::spinOnce(); // spinOnce for the callbacks
-
     // If the order_vector has a sıze greater than zero
     if (order_vector.size() > 0) {
       // get the current order from the vector
@@ -488,11 +692,10 @@ int main(int argc, char **argv)
                       if (success)
                       {
                       // Finally, update the ROS_INFO() messages to indicate that the client.call() returned request.num_sols solutions
-                        ROS_INFO("Call to ik_service returned [%i] solutions", ik_pose.response.num_sols);
+                        //ROS_INFO("Call to ik_service returned [%i] solutions", ik_pose.response.num_sols);
                         
                         int solutionNum = chooseSolution(ik_pose.response);
-                         // Set and publish the joint trajectory
-                         setAndPublishJointTrajectory();
+                        // Set and publish the joint trajectory
                         // print the chosen solution
                         for(int j = 0 ; j < 6 ; j++){
                           ROS_INFO("Joint angle [%d]: %.4f ", j+1, ik_pose.response.joint_solutions[solutionNum].joint_angles[j]);
@@ -543,14 +746,20 @@ int main(int argc, char **argv)
       }
 
       // Remove the processed order from the queue when it is completed
-      order_vector.pop_back();
+      order_vector.pop_back(); 
     } 
-  else {
-          // Check for new orders every second
-          ros::Duration(1.0).sleep(); 
+  else 
+  {
+    // Check for new orders every second
+    ros::Duration(1.0).sleep(); 
   } 
+  // LAB 6 PRINTABLE OUTCOMES
+    ROS_INFO("%s===========================LAB6=============================================",GREEN_TEXT);
+    setAndPublishJointTrajectory();
+    moveToSpecificPoints(ik_pose,pose_ik_client,2);
+    ROS_INFO("%s============================================================================",GREEN_TEXT);
   }
-  // ROS spin is removedd in Lab6
+  // ROS spin is removed in Lab6
   //ros::spin(); 
   return 0;
 }
