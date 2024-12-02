@@ -13,9 +13,13 @@
 #include "sensor_msgs/JointState.h"
 #include "trajectory_msgs/JointTrajectory.h" // L6
 #include "trajectory_msgs/JointTrajectoryPoint.h" // L6
+#include "actionlib/client/simple_action_client.h" // L7 -Action Server Headers
+#include "actionlib/client/terminal_state.h" // L7- Action Sever Headers
+#include "control_msgs/FollowJointTrajectoryAction.h" // L7 - Action Server "message type"
 
 #define GREEN_TEXT "\033[32m"
 #define RESET_TEXT "\033[0m"
+#define BLUE_TEXT  "\033[34m"
 
 // Declare the variable in this way where necessary in the code.
 std_srvs::Trigger begin_comp;
@@ -49,6 +53,10 @@ int joint_trajectory_header_count = 0;
 
 //L6-
 std::vector<geometry_msgs::Pose> specific_poses;
+
+// L7 - initialize a goal number and sequence number for the header
+int goal_num = 0;
+static int sequence_num = 0;
 
 // This function is written to get the appropriate camera data according to given storage unit id
 const osrf_gear::LogicalCameraImage* getCameraData(
@@ -452,6 +460,185 @@ void setAndPublishJointTrajectory() {
 }
 
 
+// L7- Callbacks
+// This callback is called when a goal becomes active.
+void resultCallback(const actionlib::SimpleClientGoalState& state,
+                    const control_msgs::FollowJointTrajectoryResultConstPtr& result) {
+    ROS_INFO("%sAction completed with state: %s", BLUE_TEXT,state.toString().c_str());
+}
+
+void goalActiveCallback() {
+    ROS_INFO("%sGoal is now active.",BLUE_TEXT);
+}
+
+void feedbackCallback(const control_msgs::FollowJointTrajectoryFeedbackConstPtr& feedback) {
+    ROS_INFO("%sReceived feedback.",BLUE_TEXT);
+}
+
+
+trajectory_msgs::JointTrajectory returnJointTrajectory(ik_service::PoseIK& ik_pose, ros::ServiceClient& pose_ik_client, int solutionNum){
+   // Clear the vector
+  specific_poses.clear();
+  // give the names of the joint trajectory (according to the order mentioned in the lab)
+  trajectory_msgs::JointTrajectory joint_trajectory;
+  joint_trajectory.joint_names = {
+          "linear_arm_actuator_joint",
+          "shoulder_pan_joint",
+          "shoulder_lift_joint",
+          "elbow_joint",
+          "wrist_1_joint",
+          "wrist_2_joint",
+          "wrist_3_joint"
+        };
+  // Define the positions and orientations for each pose
+  std::vector<std::vector<double>> positions = {
+      {0.75, 0.0, 0.95},
+      {0.0, 0.75, 0.95},
+      {0.25, 0.75, 0.95},
+      {0.75, 0.25, 0.95},
+      {0.75, 0.45, 0.75}
+  };
+
+  std::vector<std::vector<double>> orientations = {
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0},
+      {1.0, 0.0, 0.0, 0.0}
+  };
+  double prev_goal_time = 0;
+
+  // Iterate over each set of positions and orientations to create poses
+  for (size_t i = 0; i < positions.size(); ++i) {
+    geometry_msgs::Pose pose;
+
+    // Set position
+    pose.position.x = positions[i][0];
+    pose.position.y = positions[i][1];
+    pose.position.z = positions[i][2];
+
+    // Set orientation
+    pose.orientation.w = orientations[i][0];
+    pose.orientation.x = orientations[i][1];
+    pose.orientation.y = orientations[i][2];
+    pose.orientation.z = orientations[i][3];
+
+    // Set the request field of the ik_service::PoseIK variable equal to the goal pose
+    ik_pose.request.part_pose = pose;
+    // Update the client.call() to use the ik_service::PoseIK variable.
+    bool success = pose_ik_client.call(ik_pose);
+    if (success) {
+      ROS_INFO("%smtsp: Call to ik_service returned [%i] solutions",GREEN_TEXT, ik_pose.response.num_sols);
+      if (ik_pose.response.num_sols > 0) {
+        // Iterate over the solution and print the angles
+        ROS_INFO("%smtsp:Chosen solution: %d",GREEN_TEXT, solutionNum);
+        if (solutionNum >= 0 && solutionNum < ik_pose.response.num_sols) {
+          for (int j = 0; j < ik_pose.response.joint_solutions[solutionNum].joint_angles.size(); j++) {
+            ROS_INFO("%smtsp:Joint angle [%d]: %.4f",GREEN_TEXT, j + 1, ik_pose.response.joint_solutions[solutionNum].joint_angles[j]);
+          }
+          // create joint_angles variable from the response of the ik_pose response
+          std::vector<double> joint_angles(ik_pose.response.joint_solutions[solutionNum].joint_angles.begin(),
+                                           ik_pose.response.joint_solutions[solutionNum].joint_angles.end());
+        // create joint trajectory for the start points
+        trajectory_msgs::JointTrajectoryPoint start_point;
+        start_point.positions.resize(joint_trajectory.joint_names.size());
+        for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
+          for (int s_joint = 0; s_joint < joint_states.name.size(); s_joint++) {
+            if (joint_trajectory.joint_names[t_joint] == joint_states.name[s_joint]) {
+              start_point.positions[t_joint] = joint_states.position[s_joint];
+              break;
+            }
+          }
+        }
+
+        // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
+        start_point.positions[0] = joint_states.position[1];
+        start_point.time_from_start = ros::Duration(prev_goal_time + 3.0);
+
+        // create joint trajectory for the goal points
+        trajectory_msgs::JointTrajectoryPoint goal_point;
+        goal_point.positions.resize(joint_trajectory.joint_names.size());
+        start_point.positions[0] = joint_states.position[1];
+        for(int j = 0; j < joint_angles.size(); j++){
+          goal_point.positions[j+1] = joint_angles[j];
+        }
+        goal_point.time_from_start = ros::Duration(prev_goal_time + 7.0); 
+        prev_goal_time = prev_goal_time + 7.0;
+        joint_trajectory.points.push_back(start_point);
+        joint_trajectory.points.push_back(goal_point);
+
+         
+        }
+      }
+    } 
+    else {
+      ROS_WARN("mtsp: Failed to call ik_service!!");
+    }  
+
+  }
+  for (size_t i = 0; i < joint_trajectory.points.size(); ++i) {
+    ROS_INFO("Waypoint %zu: time_from_start = %.2f", i, joint_trajectory.points[i].time_from_start.toSec());
+  }
+
+  return joint_trajectory;
+}
+
+
+// L7- Action Server Client - Use FollowJointTrajectoryAction which defines the full action interface, goal, feedback, result structures
+// THis defines the server-client comminication and mid-level interaction
+void actionServerImplementation(trajectory_msgs::JointTrajectory& joint_trajectory){
+  // Instantiate the Action Server client
+  // The "true" at the end of the instantiation causes a separate thread to be
+  // spun for the client. There is some analogy to the AsyncSpinner here.
+  actionlib::SimpleActionClient<control_msgs::FollowJointTrajectoryAction> trajectory_ac("ariac/arm1/arm/follow_joint_trajectory", true);
+
+  ROS_INFO("%sWaiting Action Server...",BLUE_TEXT);
+  trajectory_ac.waitForServer();
+  ROS_INFO("%sAction server started, sending goal.",BLUE_TEXT);
+
+  // Create the structure for the trajectory to populate for running the Action Server.
+  control_msgs::FollowJointTrajectoryAction joint_trajectory_as;
+
+  // It is possible to reuse the JointTrajectory from above as an element in the goal
+  // Create the goal structure for the action server
+  control_msgs::FollowJointTrajectoryGoal goal;
+
+  // Populate the goal with the given trajectory
+  goal.trajectory = joint_trajectory;
+
+  // Send the goal to the action server
+  trajectory_ac.sendGoal(goal,
+                         &resultCallback,  // Callback when the goal is finished
+                         &goalActiveCallback,  // Callback when the goal becomes active
+                         &feedbackCallback);  // Callback for feedback
+
+  // Check the state of the action server
+  actionlib::SimpleClientGoalState goal_state = trajectory_ac.getState();
+
+  // Log the state
+  ROS_INFO("%sGoal sent, waiting for result...", BLUE_TEXT);
+
+    // Wait for the result (block until the action is done)
+    bool finished_before_timeout = trajectory_ac.waitForResult(ros::Duration(60.0)); // Wait for 60 seconds
+
+    if (finished_before_timeout) {
+        // Check the state of the action server
+        actionlib::SimpleClientGoalState state = trajectory_ac.getState();
+        ROS_INFO("%sAction completed with state: [%s]", BLUE_TEXT, state.toString().c_str());
+
+        // If the action was successful
+        if (state == actionlib::SimpleClientGoalState::SUCCEEDED) {
+            ROS_INFO("%sTrajectory execution succeeded.", BLUE_TEXT);
+        } else {
+            ROS_WARN("%sTrajectory execution failed with state: [%s]", BLUE_TEXT, state.toString().c_str());
+        }
+    } else {
+        ROS_WARN("%sAction did not finish before the timeout.", BLUE_TEXT);
+        trajectory_ac.cancelGoal(); // Optionally cancel the goal
+    }
+}
+
+
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "start_competition_node");
@@ -754,12 +941,18 @@ int main(int argc, char **argv)
     ros::Duration(1.0).sleep(); 
   } 
   // LAB 6 PRINTABLE OUTCOMES
-    ROS_INFO("%s===========================LAB6=============================================",GREEN_TEXT);
-    setAndPublishJointTrajectory();
-    moveToSpecificPoints(ik_pose,pose_ik_client,2);
-    ROS_INFO("%s============================================================================",GREEN_TEXT);
+  //  ROS_INFO("%s===========================LAB6=============================================",GREEN_TEXT);
+  //  setAndPublishJointTrajectory();
+  //  moveToSpecificPoints(ik_pose,pose_ik_client,2);
+  //  ROS_INFO("%s============================================================================",GREEN_TEXT);
+
+  // LAB 7 PRINTABLE OUTCOMES
+   ROS_INFO("%s===========================LAB7=============================================",BLUE_TEXT);
+  trajectory_msgs::JointTrajectory joint_trajectory = returnJointTrajectory(ik_pose, pose_ik_client, 2);
+  actionServerImplementation(joint_trajectory);
+   ROS_INFO("%s============================================================================",BLUE_TEXT);
   }
-  // ROS spin is removed in Lab6
+  // ROS spin is removed in Lab 6
   //ros::spin(); 
   return 0;
 }

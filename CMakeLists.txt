@@ -18,6 +18,8 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
   geometry_msgs
   trajectory_msgs
+  actionlib
+  control_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -112,7 +114,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES ariac_entry
-  CATKIN_DEPENDS ecse_373_ariac ik_service roscpp rviz std_srvs osrf_gear tf2 tf2_ros geometry_msgs trajectory_msgs
+  CATKIN_DEPENDS ecse_373_ariac ik_service roscpp rviz std_srvs osrf_gear tf2 tf2_ros geometry_msgs trajectory_msgs actionlib control_msgs
 #  DEPENDS system_lib
 )
 
