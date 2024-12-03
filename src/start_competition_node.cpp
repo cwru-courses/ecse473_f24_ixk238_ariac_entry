@@ -54,6 +54,8 @@ int joint_trajectory_header_count = 0;
 //L6-
 std::vector<geometry_msgs::Pose> specific_poses;
 
+trajectory_msgs::JointTrajectoryPoint original_joint_trajectory_point;
+
 // L7 - initialize a goal number and sequence number for the header
 int goal_num = 0;
 static int sequence_num = 0;
@@ -203,7 +205,7 @@ int chooseSolution(const auto& ik_pose) {
   for(int i = 0; i < ik_pose.num_sols; i++) {
     // Restrict the solution for shoulder_lift_joint to a region of 90 degrees to reduce solutions
     double shoulder_lift_angle = ik_pose.joint_solutions[i].joint_angles[1];
-    if (shoulder_lift_angle >= 0 && shoulder_lift_angle <= 1.5708) {
+    if (shoulder_lift_angle >= 1.5708 && shoulder_lift_angle <= 4.7123) {
       // Further restrict based on wrist_2_joint angle to pick only one solution
       double wrist_2_angle = ik_pose.joint_solutions[i].joint_angles[4];
       if ((wrist_2_angle >= (1.5708 - tolerance) && wrist_2_angle <= (1.5708 + tolerance)) ||
@@ -486,7 +488,7 @@ void moveInFrontOfBin(double linear_arm_point) {
       }
     }
     // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
-    start_point.positions[0] = joint_states.position[1];
+    //start_point.positions[0] = joint_states.position[1];
     start_point.time_from_start = ros::Duration(0.0);
 
   /// create joint trajectory for the start points
@@ -502,7 +504,7 @@ void moveInFrontOfBin(double linear_arm_point) {
     }
     // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
     end_point.positions[0] = linear_arm_point;
-    end_point.time_from_start = ros::Duration(2.0);
+    end_point.time_from_start = ros::Duration(6.0);
     
     joint_trajectory.points.push_back(start_point);
     joint_trajectory.points.push_back(end_point);
@@ -510,14 +512,18 @@ void moveInFrontOfBin(double linear_arm_point) {
     // Publish the desired trajectory
     joint_trajectory_publisher.publish(joint_trajectory);
     joint_trajectory_header_count++;
+    ROS_INFO("Sleeping for 7 seconds...");
+    ros::Duration(7.0).sleep();
+    ROS_INFO("Awake now!");
    
     // Optionally wait for a fixed time to ensure execution
-    ros::Rate rate(1); // 10 Hz
-    while (ros::ok() && armMoving(joint_states)) {
-        rate.sleep(); // Wait until the robot stops
-    }
+    // ros::Rate rate(10); // 10 Hz
+    // while (!armMoving(joint_states)) {
+    //    break; 
+    // }
+    // rate.sleep(); // Wait until the robot stops
 
-    ROS_INFO("%sRobot should now be in front of the bin.", BLUE_TEXT);
+    // ROS_INFO("%sRobot should now be in front of the bin.", BLUE_TEXT);
 }
 
 
@@ -807,6 +813,19 @@ int main(int argc, char **argv)
   ros::AsyncSpinner spinner(1); // Use 1 thread
   spinner.start(); // A spinner makes calling ros::spin() unnecessary
 
+  //store original joint traj
+  trajectory_msgs::JointTrajectory joint_trajectory;
+                          joint_trajectory.joint_names = {
+                          "linear_arm_actuator_joint",
+                          "shoulder_pan_joint",
+                          "shoulder_lift_joint",
+                          "elbow_joint",
+                          "wrist_1_joint",
+                          "wrist_2_joint",
+                          "wrist_3_joint"
+                        };
+  
+
   // In order to iterate over the orders 
   while (ros::ok()) {
     // ROS spin is removedd in Lab6
@@ -818,6 +837,16 @@ int main(int argc, char **argv)
             
       // print order ID info to check in the output
       ROS_INFO("Order ID: %s", curr_order.order_id.c_str());
+
+      original_joint_trajectory_point.positions.resize(joint_trajectory.joint_names.size());
+  for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
+    for (int s_joint = 0; s_joint < joint_states.name.size(); s_joint++) {
+      if (joint_trajectory.joint_names[t_joint] == joint_states.name[s_joint]) {
+          original_joint_trajectory_point.positions[t_joint] = joint_states.position[s_joint];
+          break;
+          }
+      }
+  }
 
 
     // Iterate over each shipment in the order
@@ -921,16 +950,56 @@ int main(int argc, char **argv)
                       // do the transfromation so the pose of the part with respect to the robot is known
                       tf2::doTransform(part_pose, goal_pose, tfStamped);
 
-                      // Add height to the goal pose.
-                      goal_pose.pose.position.z += 0.10; // 10 cm above the part
-                      goal_pose.pose.position.y += 0.05; // 10 cm side since collide with the camera
                       // Print the transformed goal pose
                       ROS_INFO("Location of the part in the reference frame of the robot arm1_base_link before robot moves in front of the bin: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
                               goal_pose.pose.position.x, goal_pose.pose.position.y, goal_pose.pose.position.z,
                               goal_pose.pose.orientation.x, goal_pose.pose.orientation.y,
                               goal_pose.pose.orientation.z, goal_pose.pose.orientation.w);
 
-                      // Set the request field of the ik_service::PoseIK variable equal to the goal pose
+                        // before finding the inverse kinematics of the part, need to move the linear_arm actuator in front of the bin
+                      // therefore create joint_trajectory for it first
+                      // find the place of the bin by using the pose of the product
+                      geometry_msgs::PoseStamped in_front_of_bin_pose = goal_pose;
+                       moveInFrontOfBin(goal_pose.pose.position.y);
+
+                       //create jointtrajectory for the part
+
+              
+                      // perform the transformation after the robot moved in front of the bin
+                      tfStamped = tfBuffer.lookupTransform("arm1_base_link", camera_frame_name.c_str(),
+                      ros::Time(0.0), ros::Duration(10.0));
+                      ROS_INFO("Transform from [%s] to [%s]: Translation after the robot moves in front of the bin -> x=%.2f, y=%.2f, z=%.2f, Rotation -> x=%.2f, y=%.2f, z=%.2f, w=%.2f",
+                      camera_frame_name.c_str(), "arm1_base_link",
+                      tfStamped.transform.translation.x, tfStamped.transform.translation.y, tfStamped.transform.translation.z,
+                      tfStamped.transform.rotation.x, tfStamped.transform.rotation.y, tfStamped.transform.rotation.z, tfStamped.transform.rotation.w);
+
+                      // do the transfromation so the pose of the part with respect to the robot is known
+                      tf2::doTransform(part_pose, goal_pose, tfStamped);
+
+                      // Add some waypoints
+
+                      geometry_msgs::PoseStamped approach_pose_5, approach_pose_10, approach_pose_5_goal, approach_pose_10_goal;
+                      // Add height to the goal pose.
+                      // approach_pose_10 = part_pose;
+                      // approach_pose_5 = part_pose;
+
+                     
+
+                      // tf2::doTransform(approach_pose_10, approach_pose_10_goal, tfStamped);
+                      // tf2::doTransform(approach_pose_5, approach_pose_5_goal, tfStamped);
+                      approach_pose_10_goal = goal_pose;
+                      approach_pose_5_goal = goal_pose;
+                      approach_pose_10_goal.pose.position.z += 0.2;
+                      approach_pose_5_goal.pose.position.z += 0.10;
+                      goal_pose.pose.position.z += 0.02; // 1 cm above the part
+                      
+
+                      // Print the transformed goal pose
+                      ROS_INFO("Location of the part in the reference frame of the robot arm1_base_link after the robot moves in front of the bin: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
+                              goal_pose.pose.position.x, goal_pose.pose.position.y, goal_pose.pose.position.z,
+                              goal_pose.pose.orientation.x, goal_pose.pose.orientation.y,
+                              goal_pose.pose.orientation.z, goal_pose.pose.orientation.w);
+                      //Set the request field of the ik_service::PoseIK variable equal to the goal pose
                       ik_pose.request.part_pose = goal_pose.pose;
 
                       // Update the client.call() to use the ik_service::PoseIK variable.
@@ -940,26 +1009,64 @@ int main(int argc, char **argv)
                       // Finally, update the ROS_INFO() messages to indicate that the client.call() returned request.num_sols solutions
                         //ROS_INFO("Call to ik_service returned [%i] solutions", ik_pose.response.num_sols);
                         
-                        int solutionNum = 0;
+                        int solutionNum = 2;
                         // Set and publish the joint trajectory
                         // print the chosen solution
                         for(int j = 0 ; j < 6 ; j++){
                           ROS_INFO("Joint angle [%d]: %.4f ", j+1, ik_pose.response.joint_solutions[solutionNum].joint_angles[j]);
                         }
                         // Variable for the trajectory
-                        trajectory_msgs::JointTrajectory joint_trajectory;
-                          joint_trajectory.joint_names = {
-                          "linear_arm_actuator_joint",
-                          "shoulder_pan_joint",
-                          "shoulder_lift_joint",
-                          "elbow_joint",
-                          "wrist_1_joint",
-                          "wrist_2_joint",
-                          "wrist_3_joint"
-                        };
+                        original_joint_trajectory_point.time_from_start = ros::Duration(prev_goal_time + 15);
                         // create joint_angles variable from the response of the ik_pose response
                         std::vector<double> joint_angles(ik_pose.response.joint_solutions[solutionNum].joint_angles.begin(),
                                            ik_pose.response.joint_solutions[solutionNum].joint_angles.end());
+
+                        // create joint trajectory for the goal points
+                        trajectory_msgs::JointTrajectoryPoint goal_point;
+                        goal_point.positions.resize(joint_trajectory.joint_names.size());
+                        goal_point.positions[0] = in_front_of_bin_pose.pose.position.y; //0.00001+0.10;
+                        for(int j = 0; j < joint_angles.size(); j++){
+                          goal_point.positions[j+1] = joint_angles[j];
+                        }
+                        goal_point.time_from_start = ros::Duration(prev_goal_time + 9);
+
+                        //Set the request field of the ik_service::PoseIK variable equal to the goal pose
+                         ik_pose.request.part_pose = approach_pose_5_goal.pose;
+
+                        // Update the client.call() to use the ik_service::PoseIK variable.
+                        bool success_5 = pose_ik_client.call(ik_pose);
+                        //solutionNum = chooseSolution(ik_pose.response);
+                         // create joint_angles variable from the response of the ik_pose response
+                        std::vector<double> joint_angles_5(ik_pose.response.joint_solutions[solutionNum].joint_angles.begin(),
+                                           ik_pose.response.joint_solutions[solutionNum].joint_angles.end());
+
+                        // create joint trajectory for the goal points
+                        trajectory_msgs::JointTrajectoryPoint approach_point_5;
+                        approach_point_5.positions.resize(joint_trajectory.joint_names.size());
+                        approach_point_5.positions[0] = in_front_of_bin_pose.pose.position.y; //0.00001+0.10;
+                        for(int j = 0; j < joint_angles_5.size(); j++){
+                          approach_point_5.positions[j+1] = joint_angles_5[j];
+                        }
+                        approach_point_5.time_from_start = ros::Duration(prev_goal_time + 8);
+
+                        //Set the request field of the ik_service::PoseIK variable equal to the goal pose
+                        ik_pose.request.part_pose = approach_pose_10_goal.pose;
+
+                        // Update the client.call() to use the ik_service::PoseIK variable.
+                        bool success_10 = pose_ik_client.call(ik_pose);
+                        //solutionNum = chooseSolution(ik_pose.response);
+                         // create joint_angles variable from the response of the ik_pose response
+                        std::vector<double> joint_angles_10(ik_pose.response.joint_solutions[solutionNum].joint_angles.begin(),
+                                           ik_pose.response.joint_solutions[solutionNum].joint_angles.end());
+
+                        // create joint trajectory for the goal points
+                        trajectory_msgs::JointTrajectoryPoint approach_point_10;
+                        approach_point_10.positions.resize(joint_trajectory.joint_names.size());
+                        approach_point_10.positions[0] = in_front_of_bin_pose.pose.position.y; //0.00001+0.10;
+                        for(int j = 0; j < joint_angles_10.size(); j++){
+                          approach_point_10.positions[j+1] = joint_angles_10[j];
+                        }
+                        approach_point_10.time_from_start = ros::Duration(prev_goal_time + 7.0);
 
                         // create joint trajectory for the start points
                         trajectory_msgs::JointTrajectoryPoint start_point;
@@ -974,22 +1081,23 @@ int main(int argc, char **argv)
                         }
 
                         // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
-                        start_point.positions[0] = joint_states.position[1]+0.10;
+                        //start_point.positions[0] = joint_states.position[1];
                         start_point.time_from_start = ros::Duration(prev_goal_time + 3.0);
                         
-                        // create joint trajectory for the goal points
-                        trajectory_msgs::JointTrajectoryPoint goal_point;
-                        goal_point.positions.resize(joint_trajectory.joint_names.size());
-                        goal_point.positions[0] = joint_states.position[1]; //0.00001+0.10;
-                        for(int j = 0; j < joint_angles.size(); j++){
-                          goal_point.positions[j+1] = joint_angles[j];
-                        }
-                        goal_point.time_from_start = ros::Duration(prev_goal_time + 7.0); 
-                        prev_goal_time = prev_goal_time + 7.0;
-                        joint_trajectory.points.push_back(start_point);
-                        joint_trajectory.points.push_back(goal_point);
-                        actionServerImplementation(joint_trajectory);
+                      
+                        prev_goal_time = prev_goal_time + 20.0;
 
+
+                        joint_trajectory.points.push_back(start_point);
+                        joint_trajectory.points.push_back(approach_point_10);
+                        joint_trajectory.points.push_back(approach_point_5);
+                        
+                        joint_trajectory.points.push_back(goal_point);
+                        joint_trajectory.points.push_back(original_joint_trajectory_point);
+                        actionServerImplementation(joint_trajectory);
+                         ROS_INFO("Sleeping for 7 seconds...");
+                          ros::Duration(20.0).sleep();
+                          ROS_INFO("Awake now!");
 
                       //Remove the processed product from the queue when its is completd
 			                found_product_pose.pop_back();
