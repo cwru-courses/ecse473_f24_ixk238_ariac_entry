@@ -16,6 +16,9 @@
 #include "actionlib/client/simple_action_client.h" // L7 -Action Server Headers
 #include "actionlib/client/terminal_state.h" // L7- Action Sever Headers
 #include "control_msgs/FollowJointTrajectoryAction.h" // L7 - Action Server "message type"
+#include "osrf_gear/VacuumGripperControl.h" // L8
+#include "osrf_gear/VacuumGripperState.h" // L8
+ 
 
 #define GREEN_TEXT "\033[32m"
 #define RESET_TEXT "\033[0m"
@@ -54,7 +57,14 @@ int joint_trajectory_header_count = 0;
 //L6-
 std::vector<geometry_msgs::Pose> specific_poses;
 
+//L7
 trajectory_msgs::JointTrajectoryPoint original_joint_trajectory_point;
+
+// L8
+osrf_gear::VacuumGripperControl gripper_variable;
+
+// Create a global variable to track the current state of the vacuum gripper.
+osrf_gear::VacuumGripperState gripper_state;
 
 // L7 - initialize a goal number and sequence number for the header
 int goal_num = 0;
@@ -136,6 +146,19 @@ void jointStatesCallback(const sensor_msgs::JointState::ConstPtr& msg){
   }
 
   was_moving = is_moving;
+}
+
+void vacuumGripperStateCallback(const osrf_gear::VacuumGripperState::ConstPtr& msg)
+ {
+// Log when the vacuum gripper turns on and off.
+if (msg->enabled != gripper_state.enabled) {
+ROS_INFO("Vacuum just turned %s.", msg->enabled ? "on" : "off");
+}
+// Log when the vacuum gripper picks up or drops a part.
+if (msg->attached != gripper_state.attached) {
+ROS_INFO("Gripper is %sgripping something.", msg->attached ? "" : "not ");
+}
+gripper_state = *msg;
 }
 
 
@@ -223,7 +246,7 @@ int chooseSolution(const auto& ik_pose, geometry_msgs::PoseStamped& part_pose) {
              
          }
       }
-      return 0;
+      return 2;
     
   }
   return -1; // Return -1 if no valid solution is found
@@ -788,6 +811,16 @@ int main(int argc, char **argv)
   // Create service client in order to request the bin location of a specific material type 
   ros::ServiceClient request_bin_location = n.serviceClient<osrf_gear::GetMaterialLocations>("/ariac/material_locations");
 
+  // Create Service Client for the Vacuum Gripper
+  ros::ServiceClient gripper_service = n.serviceClient<osrf_gear::VacuumGripperControl>("/ariac/arm1/gripper/control");
+
+ // Wait for the service to be available
+  if (!ros::service::waitForService("/ariac/arm1/gripper/control", ros::Duration(10.0))) {
+      ROS_ERROR("Service /ariac/arm1/gripper/control not available.");
+      return 1;
+  }
+
+
   // L6- Get the arm joint names
   ros::param::get("/ariac/arm1/arm/joints", joint_names);
 
@@ -796,6 +829,10 @@ int main(int argc, char **argv)
 
   //L6- Create a publisher for the joint trajectory command topic
   joint_trajectory_publisher = n.advertise<trajectory_msgs::JointTrajectory>("/ariac/arm1/arm/command", 10);
+
+  // L8 - Create a subscriber to receive the state of the vacuum of the robot
+  ros::Subscriber gripper_state_sub = n.subscribe("/ariac/arm1/gripper/state", 10, vacuumGripperStateCallback);
+
 
   // Variable to capture service call success.
   int service_call_succeeded;
@@ -835,6 +872,17 @@ int main(int argc, char **argv)
     "wrist_2_joint",
     "wrist_3_joint"
   };
+  // reverse joint trajectory 
+  trajectory_msgs::JointTrajectory reverse_joint_trajectory;
+  reverse_joint_trajectory.joint_names = {
+    "linear_arm_actuator_joint",
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint"
+  };
   
 
   // In order to iterate over the orders 
@@ -846,16 +894,25 @@ int main(int argc, char **argv)
             
       // print order ID info to check in the output
       ROS_INFO("Order ID: %s", curr_order.order_id.c_str());
-
+      std::vector<double> home_pose = {0.0, M_PI, 2.5 * M_PI / 2.0, 3.0 * M_PI / 4.0, 3.77, 3.0 *M_PI / 2.0, 0.0};
       original_joint_trajectory_point.positions.resize(joint_trajectory.joint_names.size());
-  for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
-    for (int s_joint = 0; s_joint < joint_states.name.size(); s_joint++) {
-      if (joint_trajectory.joint_names[t_joint] == joint_states.name[s_joint]) {
-          original_joint_trajectory_point.positions[t_joint] = joint_states.position[s_joint];
-          break;
-          }
-      }
-  }
+      // Directly copy the home_pose values - updated according to the given values
+        for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
+            if (t_joint < home_pose.size()) {
+                original_joint_trajectory_point.positions[t_joint] = home_pose[t_joint];
+            } else {
+                ROS_WARN("Joint index exceeds home_pose size. Setting to default 0.0");
+                original_joint_trajectory_point.positions[t_joint] = 0.0;  // Default for extra joints if any
+            }
+        }
+  // for (int t_joint = 0; t_joint < joint_trajectory.joint_names.size(); t_joint++) {
+  //   for (int s_joint = 0; s_joint < joint_states.name.size(); s_joint++) {
+  //     if (joint_trajectory.joint_names[t_joint] == joint_states.name[s_joint]) {
+  //         original_joint_trajectory_point.positions[t_joint] = joint_states.position[s_joint];
+  //         break;
+  //         }
+  //     }
+  // }
 
 
     // Iterate over each shipment in the order
@@ -915,8 +972,10 @@ int main(int argc, char **argv)
 									    << ", w: " << model.pose.orientation.w << ")");
 							    
 							    found_product = true;
-                  // then let's store the pose of the found product so we can apply transformations on it later
+                    // then let's store the pose of the found product so we can apply transformations on it later
                   found_product_pose.push_back(model.pose);
+
+ 
 							    //break; // Stop searching models if we found the product
 							  }  
 					    }
@@ -925,8 +984,9 @@ int main(int argc, char **argv)
 					    }
             
                  double prev_goal_time = 0;
+                 bool erase_found_product = true;
                 // if there is any found product, apply transformations
-                while(found_product_pose.size() > 0){
+                while(found_product_pose.size() > 0 ){
 
                    // get camera frame name in order to transform
                   std::string camera_frame_name = "logical_camera_"+storage_unit.unit_id+"_frame";
@@ -937,7 +997,13 @@ int main(int argc, char **argv)
                 
                   geometry_msgs::PoseStamped part_pose, goal_pose;
                   //part_pose.pose = found_product_pose.back();
-                  part_pose.pose = found_product_pose[found_product_index];
+                  if (!found_product_pose.empty()) {
+                      part_pose.pose = found_product_pose[found_product_index];
+                  } else {
+                      ROS_WARN("No product poses found in found_product_pose vector.");
+                      continue; // Skip processing if no product pose is available
+                  }
+
 
                   ROS_INFO("Location of the part in refernce frame of the logical camera: Position -> x: %.2f, y: %.2f, z: %.2f, Orientation -> x: %.2f, y: %.2f, z: %.2f, w: %.2f",
                           part_pose.pose.position.x, part_pose.pose.position.y, part_pose.pose.position.z,
@@ -1000,6 +1066,15 @@ int main(int argc, char **argv)
                       // therefore create joint_trajectory for it first
                       // find the place of the bin by using the pose of the product
                       geometry_msgs::PoseStamped in_front_of_bin_pose = goal_pose;
+                      if(part_pose.pose.position.y< 0){
+                          in_front_of_bin_pose.pose.position.y -= 0.25;
+                      }
+                      else{
+                         in_front_of_bin_pose.pose.position.y += 0.25;
+                      }
+                      if(part_pose.pose.position.y> 2.5){
+                          in_front_of_bin_pose.pose.position.y = 2.25;
+                      }
                       //in_front_of_bin_pose.pose.position.y += 0.25;
                       moveInFrontOfBin(in_front_of_bin_pose.pose.position.y);
 
@@ -1022,15 +1097,17 @@ int main(int argc, char **argv)
                       approach_pose_5_goal = goal_pose;
 
                       // gradual increment
-                      approach_pose_10_goal.pose.position.z += 0.3; // 30 cm above the part
+                      approach_pose_10_goal.pose.position.z += 0.5; // 30 cm above the part
                       if(part_pose.pose.position.y <  0){
-                        approach_pose_10_goal.pose.position.y -= 0.3; // take the trajectory wider so do not collide with the camera
+                        approach_pose_10_goal.pose.position.y -= 0.2; // take the trajectory wider so do not collide with the camera
+                        //approach_pose_5_goal.pose.position.y -= 0.1; // take the trajectory wider so do not collide with the camera
                       }
                       else{
-                        approach_pose_10_goal.pose.position.y += 0.5; // take the trajectory wider so do not collide with the camera
+                        approach_pose_10_goal.pose.position.y += 0.3; // take the trajectory wider so do not collide with the camera
+                        //approach_pose_5_goal.pose.position.y += 0.2;
                       }
-                      approach_pose_5_goal.pose.position.z += 0.10; // 10 cm above the part
-                      goal_pose.pose.position.z += 0.05; // 5 cm above the part
+                      approach_pose_5_goal.pose.position.z += 0.20; // 10 cm above the part
+                      goal_pose.pose.position.z += 0.03; // 3 cm above the part
                       
 
                       // Print the transformed goal pose
@@ -1158,23 +1235,92 @@ int main(int argc, char **argv)
                         goal_point.time_from_start = ros::Duration(prev_goal_time + 9);
                         joint_trajectory.points.push_back(goal_point);
 
+                        actionServerImplementation(joint_trajectory);
+
+                        while(!gripper_state.attached){
+                          int gripper_count_num = 0, ret;
+                          gripper_variable.request.enable = true;
+                          // Always include a ros::ok() check in loops so they will exit gracefully.
+                          while ((gripper_count_num++ < 4) && ros::ok()) {
+                            if (ret = gripper_service.call(gripper_variable)) {
+                              break;
+                            }
+                            ROS_INFO("Gripper call number %i failed. Trying again.", gripper_count_num );
+                          }
+                          if (!ret) {
+                            ROS_WARN("Gripper service call failed.");
+
+                          }
+                        }
+                        //ros::Duration(0.1).sleep(); 
+
                         approach_point_5.time_from_start = ros::Duration(prev_goal_time + 10);
-                        joint_trajectory.points.push_back(approach_point_5); 
+                        reverse_joint_trajectory.points.push_back(approach_point_5); 
 
                         approach_point_10.time_from_start = ros::Duration(prev_goal_time + 11.0);
-                        joint_trajectory.points.push_back(approach_point_10);
+                        reverse_joint_trajectory.points.push_back(approach_point_10);
 
                         original_joint_trajectory_point.time_from_start = ros::Duration(prev_goal_time + 17);
-                        joint_trajectory.points.push_back(original_joint_trajectory_point);
+                        reverse_joint_trajectory.points.push_back(original_joint_trajectory_point);
 
-                        actionServerImplementation(joint_trajectory);
-                         ROS_INFO("Sleeping for 20 seconds...");
-                          ros::Duration(7.0).sleep();
-                          ROS_INFO("Awake now!");
 
-                      //Remove the processed product from the queue when its is completd
-                      found_product_pose.erase(found_product_pose.begin());
+                        actionServerImplementation(reverse_joint_trajectory);
 
+    
+                        start_point.time_from_start = ros::Duration(prev_goal_time + 3.0);
+                        joint_trajectory.points.push_back(start_point);
+
+
+                        approach_point_10.time_from_start = ros::Duration(prev_goal_time + 7.0);
+                        joint_trajectory.points.push_back(approach_point_10);
+                        
+
+                        approach_point_5.time_from_start = ros::Duration(prev_goal_time + 8);
+                        joint_trajectory.points.push_back(approach_point_5); 
+
+
+                        goal_point.time_from_start = ros::Duration(prev_goal_time + 9);
+                        joint_trajectory.points.push_back(goal_point);
+
+                        // return the part back to its place
+                         actionServerImplementation(joint_trajectory);
+
+                        while(gripper_state.attached){
+                          int gripper_count_num_back = 0, ret_back;
+                          gripper_variable.request.enable = false;
+                          // Always include a ros::ok() check in loops so they will exit gracefully.
+                          while ((gripper_count_num_back++ < 4) && ros::ok()) {
+                            if (ret_back = gripper_service.call(gripper_variable)) {
+                              break;
+                            }
+                            ROS_INFO("Gripper call number %i failed. Trying again.", gripper_count_num_back);
+                          }
+                          if (!ret_back) {
+                            ROS_WARN("Gripper service call failed.");
+
+                          }
+                        }
+                        //ros::Duration(0.1).sleep();
+                          
+
+                         approach_point_5.time_from_start = ros::Duration(prev_goal_time + 10);
+                        reverse_joint_trajectory.points.push_back(approach_point_5); 
+
+                        approach_point_10.time_from_start = ros::Duration(prev_goal_time + 11.0);
+                        reverse_joint_trajectory.points.push_back(approach_point_10);
+
+                        original_joint_trajectory_point.time_from_start = ros::Duration(prev_goal_time + 17);
+                        reverse_joint_trajectory.points.push_back(original_joint_trajectory_point);
+
+
+                        actionServerImplementation(reverse_joint_trajectory);
+
+
+
+                      if(erase_found_product){
+                        //Remove the processed product from the queue when its is completd
+                        found_product_pose.erase(found_product_pose.begin());
+                      }
                       
                       }
                       else

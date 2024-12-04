@@ -1,4 +1,4 @@
-# Lab 7: ARIAC 2019 Part 3: Start to Pick
+# Lab 8: ARIAC 2019 Part 3: Pick up Parts
 This repository contains the `ariac_entry` package developed for the ARIAC 2019 competition. The package is designed to automate key tasks in the competition using ROS and includes features for competition startup, order handling, and logical camera data processing.
 
 ---
@@ -6,8 +6,6 @@ This repository contains the `ariac_entry` package developed for the ARIAC 2019 
 > **Note:** This package is intended for ROS Noetic on Ubuntu Focal. It is recommended to have basic knowledge of ROS nodes, services, and tf transformations to use this package effectively.
 
 ---
-
-## Table of Contents
 ## Table of Contents
 
 1. [Package Structure](#package-structure)
@@ -139,30 +137,21 @@ Clone the `ik_service` package repository and follow the `README.md` file includ
 ## Video for Running Experiment
 
 ## Example Output 1
-![Alt Text](img/lab_7_imgs/terminal_1.png)
+![Alt Text](img/lab_8_imgs/terminal_img_1.png)
 
-- As seen in the image there are some printed outputs in terminal. One of the important of them is printed in Green. ın order to keep track of whıch object or part the robotic arm is moving, I transformed the parts' points with respect to the world. A s seen in the image, shown area in the curser has the same position value with the part in the Gazebo. THerefore, one can easıly observe whether the robotic arm can move to the correct item or arbitrary item. 
+- As seen in the image there are some printed outputs in terminal. One of the important of them is printed between the blue parts. ıt explicitly said that the "Vacuum just turned on". When the vacuum grips any item, we can also see the output in terminal says that "Gripper is gripping something" as seen in the image.
 
 
 ## Example Output 2
-![Alt Text](img/lab_7_imgs/terminal_2.png)
+![Alt Text](img/lab_8_imgs/terminal_img_2.png)
 
-- As seen in terminal image, there are three different joint angle trajectory is printed. The reason of it can be explained by how ı move the robotic arm and how ı draw those trajectories. Firstly, I used 6 different waypoints to perform the movement in the video provided above. ındependent from these 6 waypoints,  ı performed one more trajectory. ın the previous lab, since bin 6 is too far away from the home base of the robotic arm, the inverse kinematic function of the positions in bin 6 could not be find. ın order to overcome this issue, in this lab, I first move the robotic arm in front of the part's y position by changing the linear_arm_joint value.
+- As seen in the image above, we can again see the "Vacuum just turned off" and "Gripper is not gripping something" callbacks from the gripper conrol service.
 
-- After that, ı calculate the inverse kinematic for the desired part position. Since the robotic arm is not that far away this time, it found solutions. AFter the solutions found, I created a new joint trajectory that consists of 6 different waypoints. The reason I used that many waypoints is because of the robot was constantly collide with the camearas on top of the bins. Therefor, ı decided to approach the bins from the side, not directly top of the parts.
+## Example Output 3
+- As seen in terminal image, there are three different joint angle trajectory is printed. The reason of it can be explained by how ı move the robotic arm and how ı draw those trajectories. Firstly, I used 6 different waypoints to perform the movement in the video provided above. Independent from these 6 waypoints,  ı performed one more trajectory. ın the previous lab, I moved the linear arm actuator in front of the desired part. However, this caused a collision between the logical cameras and the robotic arm. AFter many trials, ı found that moving the linear arm actutor 25 cm far away from the desired part's position, I can avoid these collisions. Here are the code segments that I implemented this part: 
 
-- The first waypoint is the start point which defines the current state of the robot. 
-- The second way point is 30 cm above the desired part's point. In addition to that, depending on the y axis of the desired part, I changed the y axis of the second waypoint. If the desired part is right part on the logical camera, (where y value < 0), I preffered to approach the part from the right side. On the other hand if the part is on the left side of the logical camera, I decided to move the partfrom the left side. This programming behaviour is defined this part in the code. Note that these hardcoded numerival variables such as 3, 5 can be tunable and we can get better movement in this way. 
-
-![Alt Text](img/lab_7_imgs/code_1.png)
-
-- The third waypoint uses the same logic as the second waypoint. Only difference is the third waypoint is 10cm above the part.
--The fourth waypoint is the goal waypoint. ı only add 5 cm to the z axis, so the robot arm will not hit and aborted.
-- The fifth waypoint is the same with third waypoint. I used this to perform smooth back movement.
-- The sixth waypoint is the same with the second waypoint. Again, used for smooth back movement.
-- Final wayğpoint is the home waypoint of the robotic arm. ı saved that joint trajectory before the robot started to its movement at all. Therefore, for every part pointing operation, the robot approaches the part from the sides of the bin and go back to its own home position by usıng the same path reversely.
-
-
+![Alt Text](img/lab_8_imgs/code_2.png)
+I also implemented the 7 waypoints as mentioned in the previous lab.
 
 ## Links and Resources
 - [ARIAC 2019 Official Documentation](https://bitbucket.org/osrf/ariac/wiki/2019/Home)
