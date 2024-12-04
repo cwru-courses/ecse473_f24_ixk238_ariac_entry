@@ -200,29 +200,36 @@ void logJointAngles(const auto& ik_pose) {
   }
 }
 
-int chooseSolution(const auto& ik_pose) {
+// this function choose the solution according to the position of part wrt camera too
+int chooseSolution(const auto& ik_pose, geometry_msgs::PoseStamped& part_pose) {
   const double tolerance = 0.1; // Add a small tolerance to wrist_2_joint angle
 
   for(int i = 0; i < ik_pose.num_sols; i++) {
     // Restrict the solution for shoulder_lift_joint to a region of 90 degrees to reduce solutions
     double shoulder_lift_angle = ik_pose.joint_solutions[i].joint_angles[1];
-    if (shoulder_lift_angle >=4.71238  && shoulder_lift_angle <= 6.2831) {
       // Further restrict based on wrist_2_joint angle to pick only one solution
       double wrist_2_angle = ik_pose.joint_solutions[i].joint_angles[4];
       if ((wrist_2_angle >= (1.5708 - tolerance) && wrist_2_angle <= (1.5708 + tolerance)) ||
           (wrist_2_angle >= (3 * 1.5708 - tolerance) && wrist_2_angle <= (3 * 1.5708 + tolerance))) {
          double wrist_3_angle = ik_pose.joint_solutions[i].joint_angles[5];
-         if(wrist_3_angle >= 1.5708){
-          return i;
+         if(part_pose.pose.position.y > 0 ){
+            // select solution num 2 
+            if(wrist_3_angle <= 1.5708){
+               return 2;
+            }
+            else if(wrist_3_angle<=3*1.5708){ // select solution num0
+              return 0;
+            }
+             
          }
-        return i; // Return the index of the chosen solution
       }
-    }
+      return 0;
+    
   }
   return -1; // Return -1 if no valid solution is found
 }
 
-
+// This function checking whether arm is movin or not
 bool armMoving(const sensor_msgs::JointState& joint_states) {
     double velocity_threshold = 0.01; 
     for (const auto& velocity : joint_states.velocity) {
@@ -697,7 +704,10 @@ void actionServerImplementation(trajectory_msgs::JointTrajectory& joint_trajecto
         }
         else if(state == actionlib::SimpleClientGoalState::ABORTED){
            found_product_pose.erase(found_product_pose.begin());
+           joint_trajectory.points.clear();
             ROS_INFO("%sTrajectory execution aborted probably for the collision with the camera.", BLUE_TEXT);
+            trajectory_ac.waitForServer();
+            ROS_INFO("Action server is ready for new goals.");
         } 
         else {
             ROS_WARN("%sTrajectory execution failed with state: [%s]", BLUE_TEXT, state.toString().c_str());
@@ -816,15 +826,15 @@ int main(int argc, char **argv)
 
   //store original joint traj
   trajectory_msgs::JointTrajectory joint_trajectory;
-                          joint_trajectory.joint_names = {
-                          "linear_arm_actuator_joint",
-                          "shoulder_pan_joint",
-                          "shoulder_lift_joint",
-                          "elbow_joint",
-                          "wrist_1_joint",
-                          "wrist_2_joint",
-                          "wrist_3_joint"
-                        };
+  joint_trajectory.joint_names = {
+    "linear_arm_actuator_joint",
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint"
+  };
   
 
   // In order to iterate over the orders 
@@ -957,7 +967,7 @@ int main(int argc, char **argv)
 
 
                         //============================================================
-                                                  //DELETE LATER
+                        // This part transforms the camera position of the parts into the world frame. So, we can track which part it is reaching for.
                         geometry_msgs::TransformStamped tfStamped_specific;
                         tfStamped_specific = tfBuffer.lookupTransform("world", camera_frame_name.c_str(), ros::Time(0.0), ros::Duration(1.0));
                         // Create variables
@@ -986,7 +996,7 @@ int main(int argc, char **argv)
 
                         //============================================================
 
-                        // before finding the inverse kinematics of the part, need to move the linear_arm actuator in front of the bin
+                      // before finding the inverse kinematics of the part, need to move the linear_arm actuator in front of the bin
                       // therefore create joint_trajectory for it first
                       // find the place of the bin by using the pose of the product
                       geometry_msgs::PoseStamped in_front_of_bin_pose = goal_pose;
@@ -1007,19 +1017,20 @@ int main(int argc, char **argv)
 
                       // Add some waypoints
                       geometry_msgs::PoseStamped approach_pose_5, approach_pose_10, approach_pose_5_goal, approach_pose_10_goal;
-
+                      // create two waypoints that are gradually far away from the goal point
                       approach_pose_10_goal = goal_pose;
                       approach_pose_5_goal = goal_pose;
-                      approach_pose_10_goal.pose.position.z += 0.3;
+
+                      // gradual increment
+                      approach_pose_10_goal.pose.position.z += 0.3; // 30 cm above the part
                       if(part_pose.pose.position.y <  0){
-                        approach_pose_10_goal.pose.position.y -= 0.3;
+                        approach_pose_10_goal.pose.position.y -= 0.3; // take the trajectory wider so do not collide with the camera
                       }
                       else{
-                        approach_pose_10_goal.pose.position.y += 0.5;
+                        approach_pose_10_goal.pose.position.y += 0.5; // take the trajectory wider so do not collide with the camera
                       }
-                      
-                      approach_pose_5_goal.pose.position.z += 0.10;
-                      goal_pose.pose.position.z += 0.05; // 1 cm above the part
+                      approach_pose_5_goal.pose.position.z += 0.10; // 10 cm above the part
+                      goal_pose.pose.position.z += 0.05; // 5 cm above the part
                       
 
                       // Print the transformed goal pose
@@ -1036,13 +1047,10 @@ int main(int argc, char **argv)
                       {
                       // Finally, update the ROS_INFO() messages to indicate that the client.call() returned request.num_sols solutions
                         //ROS_INFO("Call to ik_service returned [%i] solutions", ik_pose.response.num_sols);
-                        int solutionNum = chooseSolution(ik_pose.response);
-                        if(part_pose.pose.position.y >  0){
+                        int solutionNum = chooseSolution(ik_pose.response,part_pose);
+                      if(part_pose.pose.position.y >  0){
                         solutionNum = 2;
                       }
-              
-
-                        
                         // Set and publish the joint trajectory
                         ROS_INFO("1-Chosen Solution Num : %d ", solutionNum);
                         // print the chosen solution
@@ -1069,8 +1077,8 @@ int main(int argc, char **argv)
 
                         // Update the client.call() to use the ik_service::PoseIK variable.
                         bool success_5 = pose_ik_client.call(ik_pose);
-                        solutionNum = chooseSolution(ik_pose.response);
-                               if(part_pose.pose.position.y >  0){
+                        solutionNum = chooseSolution(ik_pose.response,part_pose);
+                      if(part_pose.pose.position.y >  0){
                         solutionNum = 2;
                       }
                         // Set and publish the joint trajectory
@@ -1097,8 +1105,8 @@ int main(int argc, char **argv)
 
                         // Update the client.call() to use the ik_service::PoseIK variable.
                         bool success_10 = pose_ik_client.call(ik_pose);
-                        solutionNum = chooseSolution(ik_pose.response);
-                               if(part_pose.pose.position.y >  0){
+                        solutionNum = chooseSolution(ik_pose.response,part_pose);
+                      if(part_pose.pose.position.y >  0){
                         solutionNum = 2;
                       }
                         // Set and publish the joint trajectory
@@ -1133,7 +1141,7 @@ int main(int argc, char **argv)
                         }
 
                         // Set the linear_arm_actuator_joint from joint_states as it is not part of the inverse kinematics solution.
-                        prev_goal_time = prev_goal_time + 20.0;
+                        //prev_goal_time = prev_goal_time + 20.0;
 
                         start_point.time_from_start = ros::Duration(prev_goal_time + 3.0);
                         joint_trajectory.points.push_back(start_point);
@@ -1189,7 +1197,6 @@ int main(int argc, char **argv)
                             ROS_ERROR("Failed to call service ik_service");
 
                         }
-                        
                         
                       }
 

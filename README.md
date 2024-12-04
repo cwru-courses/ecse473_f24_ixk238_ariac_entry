@@ -1,4 +1,4 @@
-# Lab 6: ARIAC 2019 Part 2: Arm Motion
+# Lab 7: ARIAC 2019 Part 3: Start to Pick
 This repository contains the `ariac_entry` package developed for the ARIAC 2019 competition. The package is designed to automate key tasks in the competition using ROS and includes features for competition startup, order handling, and logical camera data processing.
 
 ---
@@ -18,11 +18,10 @@ This repository contains the `ariac_entry` package developed for the ARIAC 2019 
 4. [Launching the Package](#launching-the-package)
 5. [Interpreting the Output](#interpreting-the-output)
     - [Terminal Outputs and Observations](#terminal-outputs-and-observations)
-    - [Position 1: (0.75, 0.0, 0.95)](#position-1-075-00-095)
-    - [Position 2: (0.0, 0.75, 0.95)](#position-2-00-075-095)
-    - [Position 3: (0.25, 0.75, 0.95)](#position-3-025-075-095)
-    - [Position 4: (0.75, 0.25, 0.95)](#position-4-075-025-095)
-    - [Position 5: (0.75, 0.45, 0.75)](#position-5-075-045-075)
+    - [Video for Running Experiment](#video-for-running-experiment)
+    - [Example Output 1](#example-output-1)
+    - [Example Output 2](#example-output-2)
+    - [Example Output 3](#example-output-3)
 6. [Links and Resources](#links-and-resources)
 
 
@@ -137,131 +136,32 @@ Clone the `ik_service` package repository and follow the `README.md` file includ
 
 - As seen from the above output, /ariac/start_competition service is now available, it is called successfully. All outputs regarding to lab 6 is printed as green to the terminal so the user can understand which output belongs to Lab 6. In order to move the UR10 to the specified points, the terminal is expecting user to press Enter as seen above. The program outputs "Please Enter to move the elbow joint only". This one will perform the setAndPublishJointTrajectory function. 
 
-### Position 1: (0.75, 0.0, 0.95) 
-![Alt Text](img/lab_6_imgs/terminal_5.png)
+## Video for Running Experiment
 
-- Next, the program again will output "Press Enter to move the robot to next specified point". In this way, it is easier to observe the each movement since we have 5 as mentioned in the lab assignment. As seen green outputs show that the inverse kinematics return 4 solutions. I used and only print solution 3 since it is the desired one. It says chosen solution: 2 since the solution indices are starting with 0. As seen from the above fivgure, joint angles are outputted. When UR10 reached the pose, the program prints two information "Robot FRame Pose" and "World Frame Pose". Since I assume that the given points in the assignment are according to robot's frame (according to the arm1_base_link frame), it is hard to verify whether the end-effector reached the desired point by observing from gazebo. Since the given positions in the gazebo are according to the "world" frame, I transformed the desired point positions according to world frame and double check whether the end effcotr reached that position in the gazebo. For example, according to this output, we moved the output to this position:
+## Example Output 1
+![Alt Text](img/lab_7_imgs/terminal_1.png)
 
-  - Position: (0.75, 0.00, 0.95)
-  - Orientation: (x: 0.00, y: 0.00, z: 0.00, w: 1.00) according to robot's frame
-
-- This correspondence the following positions in the world frame (according to output in terminal again):
-
-  - Position: (1.05, 0.00, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-- When we look at the position of end-effector (vacuum_gripper_link) in gazebo, we can see the position is reached (below image):
-
-![Alt Text](img/lab_6_imgs/terminal_6.png)
-
-- As seen the desired position in the world is reached by the vacuum gripper end effector: 
-
-![Alt Text](img/lab_6_imgs/terminal_6_cropped.png)
-  - Position: (1.05, 0.00, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-### POsition 2: (0.0, 0.75, 0.95)
-![Alt Text](img/lab_6_imgs/terminal_7.png)
-
-- Next, the program again will output "Press Enter to move the robot to next specified point". I used and only print solution 3 since it is the desired one. It says chosen solution: 2 since the solution indices are starting with 0. As seen from the above figure, joint angles are outputted. When UR10 reached the pose, the program prints two information "Robot Frame Pose" and "World Frame Pose". Since I assume that the given points in the assignment are according to robot's frame (according to the arm1_base_link frame), it is hard to verify whether the end-effector reached the desired point by observing from gazebo. Since the given positions in the gazebo are according to the "world" frame, I transformed the desired point positions according to world frame and double check whether the end effcotr reached that position in the gazebo. For example, according to this output, we moved the output to this position:
-
-  - Position: (0.00, 0.75, 0.95)
-  Orientation: (x: 0.00, y: 0.00, z: 0.00, w: 1.00) according to robot's frame
-
-- This correspondence the following positions in the world frame (according to output in terminal again):
-
-  - Position: (0.30, 0.75, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
+- As seen in the image there are some printed outputs in terminal. One of the important of them is printed in Green. ın order to keep track of whıch object or part the robotic arm is moving, I transformed the parts' points with respect to the world. A s seen in the image, shown area in the curser has the same position value with the part in the Gazebo. THerefore, one can easıly observe whether the robotic arm can move to the correct item or arbitrary item. 
 
 
-- When we look at the position of end-effector (vacuum_gripper_link) in gazebo, we can see the position is reached (below image):
+## Example Output 2
+![Alt Text](img/lab_7_imgs/terminal_2.png)
 
-![Alt Text](img/lab_6_imgs/terminal_8.png)
+- As seen in terminal image, there are three different joint angle trajectory is printed. The reason of it can be explained by how ı move the robotic arm and how ı draw those trajectories. Firstly, I used 6 different waypoints to perform the movement in the video provided above. ındependent from these 6 waypoints,  ı performed one more trajectory. ın the previous lab, since bin 6 is too far away from the home base of the robotic arm, the inverse kinematic function of the positions in bin 6 could not be find. ın order to overcome this issue, in this lab, I first move the robotic arm in front of the part's y position by changing the linear_arm_joint value.
 
-- As seen the desired position in the world is reached by the vacuum gripper end effector: 
+- After that, ı calculate the inverse kinematic for the desired part position. Since the robotic arm is not that far away this time, it found solutions. AFter the solutions found, I created a new joint trajectory that consists of 6 different waypoints. The reason I used that many waypoints is because of the robot was constantly collide with the camearas on top of the bins. Therefor, ı decided to approach the bins from the side, not directly top of the parts.
 
-![Alt Text](img/lab_6_imgs/terminal_8_cropped.png)
-  - Position: (0.30, 0.75, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
+- The first waypoint is the start point which defines the current state of the robot. 
+- The second way point is 30 cm above the desired part's point. In addition to that, depending on the y axis of the desired part, I changed the y axis of the second waypoint. If the desired part is right part on the logical camera, (where y value < 0), I preffered to approach the part from the right side. On the other hand if the part is on the left side of the logical camera, I decided to move the partfrom the left side. This programming behaviour is defined this part in the code. Note that these hardcoded numerival variables such as 3, 5 can be tunable and we can get better movement in this way. 
 
-### Position 3: (0.25, 0.75, 0.95)
-![Alt Text](img/lab_6_imgs/terminal_9.png)
+![Alt Text](img/lab_7_imgs/code_1.png)
 
-- Next, the program again will output "Press Enter to move the robot to next specified point". I used and only print solution 3 since it is the desired one. It says chosen solution: 2 since the solution indices are starting with 0. As seen from the above figure, joint angles are outputted. When UR10 reached the pose, the program prints two information "Robot Frame Pose" and "World Frame Pose". Since I assume that the given points in the assignment are according to robot's frame (according to the arm1_base_link frame), it is hard to verify whether the end-effector reached the desired point by observing from gazebo. Since the given positions in the gazebo are according to the "world" frame, I transformed the desired point positions according to world frame and double check whether the end effcotr reached that position in the gazebo. For example, according to this output, we moved the output to this position:
+- The third waypoint uses the same logic as the second waypoint. Only difference is the third waypoint is 10cm above the part.
+-The fourth waypoint is the goal waypoint. ı only add 5 cm to the z axis, so the robot arm will not hit and aborted.
+- The fifth waypoint is the same with third waypoint. I used this to perform smooth back movement.
+- The sixth waypoint is the same with the second waypoint. Again, used for smooth back movement.
+- Final wayğpoint is the home waypoint of the robotic arm. ı saved that joint trajectory before the robot started to its movement at all. Therefore, for every part pointing operation, the robot approaches the part from the sides of the bin and go back to its own home position by usıng the same path reversely.
 
-  - Position: (0.25, 0.75, 0.95)
-  - Orientation: (x: 0.00, y: 0.00, z: 0.00, w: 1.00)
- according to robot's frame
-
-- This correspondence the following positions in the world frame (according to output in terminal again):
-
-  - Position: (0.55, 0.75, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-
-- When we look at the position of end-effector (vacuum_gripper_link) in gazebo, we can see the position is reached (below image):
-
-![Alt Text](img/lab_6_imgs/terminal_10.png)
-
-- As seen the desired position in the world is reached by the vacuum gripper end effector: 
-
-![Alt Text](img/lab_6_imgs/terminal_10_cropped.png)
-   - Position: (0.55, 0.75, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-### Position 4: (0.75, 0.25, 0.95)
-![Alt Text](img/lab_6_imgs/terminal_11.png)
-
-- Next, the program again will output "Press Enter to move the robot to next specified point". I used and only print solution 3 since it is the desired one. It says chosen solution: 2 since the solution indices are starting with 0. As seen from the above figure, joint angles are outputted. When UR10 reached the pose, the program prints two information "Robot Frame Pose" and "World Frame Pose". Since I assume that the given points in the assignment are according to robot's frame (according to the arm1_base_link frame), it is hard to verify whether the end-effector reached the desired point by observing from gazebo. Since the given positions in the gazebo are according to the "world" frame, I transformed the desired point positions according to world frame and double check whether the end effcotr reached that position in the gazebo. For example, according to this output, we moved the output to this position:
-
-  - Position: (0.75, 0.25, 0.95)
-  - Orientation: (x: 0.00, y: 0.00, z: 0.00, w: 1.00)
-
- according to robot's frame
-
-- This correspondence the following positions in the world frame (according to output in terminal again):
-
-  - Position: (1.05, 0.25, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-
-
-- When we look at the position of end-effector (vacuum_gripper_link) in gazebo, we can see the position is reached (below image):
-
-![Alt Text](img/lab_6_imgs/terminal_12.png)
-
-- As seen the desired position in the world is reached by the vacuum gripper end effector: 
-
-![Alt Text](img/lab_6_imgs/terminal_12_cropped.png)
-    - Position: (1.05, 0.25, 1.95)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-
-### Position 5: (0.75, 0.45, 0.75)
-![Alt Text](img/lab_6_imgs/terminal_13.png)
-
-- Next, the program again will output "Press Enter to move the robot to next specified point". I used and only print solution 3 since it is the desired one. It says chosen solution: 2 since the solution indices are starting with 0. As seen from the above figure, joint angles are outputted. When UR10 reached the pose, the program prints two information "Robot Frame Pose" and "World Frame Pose". Since I assume that the given points in the assignment are according to robot's frame (according to the arm1_base_link frame), it is hard to verify whether the end-effector reached the desired point by observing from gazebo. Since the given positions in the gazebo are according to the "world" frame, I transformed the desired point positions according to world frame and double check whether the end effcotr reached that position in the gazebo. For example, according to this output, we moved the output to this position:
-
-  - Position: (0.75, 0.45, 0.75)
-  - Orientation: (x: 0.00, y: 0.00, z: 0.00, w: 1.00)
-
-
- according to robot's frame
-
-- This correspondence the following positions in the world frame (according to output in terminal again):
-
-  - Position: (1.05, 0.45, 1.75)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
-
-- When we look at the position of end-effector (vacuum_gripper_link) in gazebo, we can see the position is reached (below image):
-
-![Alt Text](img/lab_6_imgs/terminal_14.png)
-
-- As seen the desired position in the world is reached by the vacuum gripper end effector: 
-
-![Alt Text](img/lab_6_imgs/terminal_14_cropped.png)
-  - Position: (1.05, 0.45, 1.75)
-  - Orientation (RPY): Roll: 0.00, Pitch: -0.00, Yaw: 0.00
 
 
 ## Links and Resources
