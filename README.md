@@ -136,6 +136,10 @@ Clone the `ik_service` package repository and follow the `README.md` file includ
 
 ## Video for Running Experiment
 
+
+Uploading ariac_arm_demo_video.mp4…
+
+
 ## Example Output 1
 ![Alt Text](img/lab_8_imgs/terminal_img_1.png)
 
