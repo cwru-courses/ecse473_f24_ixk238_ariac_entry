@@ -138,6 +138,10 @@ Clone the `ik_service` package repository and follow the `README.md` file includ
 
 ## Video for Running Experiment
 
+
+https://github.com/user-attachments/assets/a6d1ab85-27b7-461c-97c3-8c3b90576a40
+
+
 ## Example Output 1
 ![Alt Text](img/lab_7_imgs/terminal_1.png)
 
